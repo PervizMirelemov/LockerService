@@ -18,13 +18,7 @@
 		<PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
 	</ItemGroup>
-
-	<ItemGroup>
-		<None Update="appsettings.json">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</None>
-	</ItemGroup>
 	<Target Name="KillRunningExe" BeforeTargets="BeforeBuild" Condition="'$(OS)' == 'Windows_NT'">
-		<Exec Command="taskkill /F /IM TaskLocker.WPF.exe" ContinueOnError="true" />
+		<Exec Command="taskkill /F /IM TaskLocker.WPF.exe" ContinueOnError="true" IgnoreExitCode="true" />
 	</Target>
 </Project>

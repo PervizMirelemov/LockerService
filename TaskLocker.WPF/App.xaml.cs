@@ -1,43 +1,47 @@
-﻿﻿using System;
-using System.Windows;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using TaskLocker.WPF.Services;
-using TaskLocker.WPF.ViewModels;
-
-// РЕШЕНИЕ ПРОБЛЕМЫ: Указываем, что используем WPF Application
+﻿using System;
 using Application = System.Windows.Application;
+using Forms = System.Windows.Forms;
+using Drawing = System.Drawing;
+using System.Windows;
 
 namespace TaskLocker.WPF
 {
     public partial class App : Application
     {
-        private readonly IHost _host;
+        private Forms.NotifyIcon? _notifyIcon;
 
-        public App()
+        // Метод OnStartup вызывается из Program.cs (app.Run())
+        protected override void OnStartup(StartupEventArgs e)
         {
-            _host = Host.CreateDefaultBuilder()
-                .ConfigureServices((context, services) =>
-                {
-                    services.AddSingleton<IWindowManagementService, PInvokeWindowService>();
-                    services.AddHostedService<ShutdownDialogMonitorService>();
-
-                    services.AddSingleton<MainViewModel>();
-                })
-                .Build();
-        }
-
-        protected override async void OnStartup(StartupEventArgs e)
-        {
-            this.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            await _host.StartAsync();
             base.OnStartup(e);
+
+            // Приложение не закрывается, даже если нет окон
+            this.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+            CreateTrayIcon();
         }
 
-        protected override async void OnExit(ExitEventArgs e)
+        private void CreateTrayIcon()
         {
-            await _host.StopAsync();
-            _host.Dispose();
+            _notifyIcon = new Forms.NotifyIcon();
+            _notifyIcon.Icon = Drawing.SystemIcons.Shield;
+            _notifyIcon.Text = "Task Locker Service";
+            _notifyIcon.Visible = true;
+
+            var contextMenu = new Forms.ContextMenuStrip();
+            var exitItem = new Forms.ToolStripMenuItem("Выход (Тест)");
+            exitItem.Click += (s, e) => Shutdown();
+            contextMenu.Items.Add(exitItem);
+            _notifyIcon.ContextMenuStrip = contextMenu;
+        }
+
+        protected override void OnExit(ExitEventArgs e)
+        {
+            if (_notifyIcon != null)
+            {
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
+            }
             base.OnExit(e);
         }
     }
