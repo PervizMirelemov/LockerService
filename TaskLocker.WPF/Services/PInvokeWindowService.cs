@@ -1,8 +1,4 @@
-﻿using System; // <--- ВАЖНО! Исправляет TimeSpan, IntPtr
-using System.Collections.Generic; // <--- Исправляет List
-using System.Linq;
-using System.Threading.Tasks; // <--- Исправляет Task
-using System.Windows;
+﻿using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TaskLocker.WPF.ViewModels;
