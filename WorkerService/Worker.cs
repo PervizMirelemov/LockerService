@@ -1,4 +1,11 @@
-﻿using System.IO;
+﻿using Microsoft.Extensions.Configuration; // Для IConfiguration
+using Microsoft.Extensions.Hosting;       // Для BackgroundService
+using Microsoft.Extensions.Logging;       // Для ILogger
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using TaskLocker.WPF.Services;
 
 namespace WorkerService
@@ -9,9 +16,8 @@ namespace WorkerService
         private readonly IWindowManagementService _windowService;
         private readonly IConfiguration _configuration;
 
-        // Интервалы времени
-        private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(20); // Основной интервал
-        private readonly TimeSpan _retryInterval = TimeSpan.FromSeconds(30); // Если файл не найден
+        private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(20);
+        private readonly TimeSpan _retryInterval = TimeSpan.FromSeconds(30);
 
         public Worker(ILogger<Worker> logger, IWindowManagementService windowService, IConfiguration configuration)
         {
@@ -24,7 +30,9 @@ namespace WorkerService
         {
             _logger.LogInformation("Worker Service started.");
 
-            // Небольшая задержка на старте
+            // Автозапуск при старте
+            RegisterInStartup();
+
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
@@ -33,10 +41,6 @@ namespace WorkerService
                 {
                     if (IsUserAllowed())
                     {
-                        // ПОЛЬЗОВАТЕЛЬ НАЙДЕН -> ПОКАЗЫВАЕМ ОКНО
-
-                        // Важно: Вызываем ShowShutdownDialog через UI Dispatcher, 
-                        // так как мы находимся в фоновом потоке.
                         System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
                         {
                             if (!_windowService.IsShutdownDialogVisible())
@@ -45,12 +49,10 @@ namespace WorkerService
                             }
                         });
 
-                        // Определяем, сколько ждать до следующего раза
                         TimeSpan delay = _windowService.NextShowDelay > TimeSpan.Zero
                             ? _windowService.NextShowDelay
                             : _checkInterval;
 
-                        // Сбрасываем флаг задержки (если была нажата кнопка "ОК" на 20 мин)
                         if (_windowService.NextShowDelay > TimeSpan.Zero)
                             _windowService.NextShowDelay = TimeSpan.Zero;
 
@@ -59,7 +61,6 @@ namespace WorkerService
                     }
                     else
                     {
-                        // Пользователь не найден, проверяем снова через 30 сек
                         _logger.LogDebug("User not allowed. Retrying shortly.");
                         await Task.Delay(_retryInterval, stoppingToken);
                     }
@@ -76,13 +77,9 @@ namespace WorkerService
         {
             try
             {
-                // Читаем путь из конфига WorkerService
                 string? configPath = _configuration.GetValue<string>("UserListPath");
-
-                // Если в конфиге пусто, ищем файл users.txt рядом с exe
                 string exePath = AppDomain.CurrentDomain.BaseDirectory;
                 string defaultPath = Path.Combine(exePath, "users.txt");
-
                 string finalPath = configPath ?? defaultPath;
 
                 if (!File.Exists(finalPath)) return false;
@@ -92,13 +89,28 @@ namespace WorkerService
                                        .Where(line => !string.IsNullOrEmpty(line));
 
                 string currentUser = Environment.UserName;
-
                 return allowedUsers.Contains(currentUser, StringComparer.OrdinalIgnoreCase);
             }
             catch
             {
                 return false;
             }
+        }
+
+        private void RegisterInStartup()
+        {
+            try
+            {
+                string? exePath = Environment.ProcessPath;
+                if (string.IsNullOrEmpty(exePath)) return;
+
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+                if (key != null)
+                {
+                    key.SetValue("TaskLockerService", exePath);
+                }
+            }
+            catch { }
         }
     }
 }

@@ -1,46 +1,79 @@
-﻿using TaskLocker.WPF;
-using TaskLocker.WPF.Services;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Win32;
+using System;
+using System.Diagnostics;
+using System.Linq;
+using TaskLocker.WPF;
+using TaskLocker.WPF.Services; // Вам нужно будет перенести интерфейс сюда или добавить ссылку
 using TaskLocker.WPF.ViewModels;
 using WorkerService;
 
 public class Program
 {
-    // STAThread обязателен для WPF
     [STAThread]
     public static void Main(string[] args)
     {
-        // 1. Создаем строителя приложения
+        // --- ТРЮК ДЛЯ УСТАНОВЩИКА ---
+        // Если запущен с флагом /Install, прописываем автозапуск и СРАЗУ ВЫХОДИМ.
+        // Установщик увидит, что процесс завершился, и скажет "Готово".
+        if (args.Contains("/Install"))
+        {
+            RegisterInStartup();
+            return;
+        }
+
+        // Если запущен с флагом /Uninstall, удаляем из автозагрузки
+        if (args.Contains("/Uninstall"))
+        {
+            UnregisterInStartup();
+            return;
+        }
+
+        // --- ОБЫЧНЫЙ ЗАПУСК ---
+        // Прописываемся в автозагрузку при каждом старте (на всякий случай)
+        RegisterInStartup();
+
         var builder = Host.CreateApplicationBuilder(args);
 
-        // 2. Настраиваем службы
-        builder.Services.AddWindowsService(options =>
-        {
-            options.ServiceName = "TaskLockerService";
-        });
-
-        // --- Регистрируем зависимости из WPF проекта ---
-        // Сервис для управления окнами
-        builder.Services.AddSingleton<IWindowManagementService, PInvokeWindowService>();
-        // ViewModel для окон
+        // Регистрируем сервисы
+        builder.Services.AddSingleton<PInvokeWindowService>();
+        builder.Services.AddSingleton<IWindowManagementService>(s => s.GetRequiredService<PInvokeWindowService>());
         builder.Services.AddTransient<MainViewModel>();
-        // Само WPF приложение
         builder.Services.AddSingleton<App>();
 
-        // --- Регистрируем наш фоновый "Мозг" ---
+        // Наш воркер
         builder.Services.AddHostedService<Worker>();
 
         var host = builder.Build();
+        host.Start(); // Запуск фона
 
-        // 3. Запускаем фоновые задачи (Worker)
-        host.Start();
-
-        // 4. Запускаем UI (WPF) в главном потоке
-        // Это блокирующий вызов, пока приложение работает
+        // Запуск UI
         var app = host.Services.GetRequiredService<App>();
-        app.InitializeComponent(); // Инициализация ресурсов из App.xaml
         app.Run();
 
-        // 5. Когда UI закрылся (если такое случится), останавливаем всё остальное
         host.StopAsync().Wait();
+    }
+
+    static void RegisterInStartup()
+    {
+        try
+        {
+            string exePath = Environment.ProcessPath!;
+            // Пробуем HKLM (для всех), если нет прав - HKCU
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            key?.SetValue("TaskLockerService", exePath);
+        }
+        catch { }
+    }
+
+    static void UnregisterInStartup()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            key?.DeleteValue("TaskLockerService", false);
+        }
+        catch { }
     }
 }
