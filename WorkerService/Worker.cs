@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32; // Для реестра
+using Microsoft.Win32; // Реестр
 using System;
 using System.IO;
 using System.Linq;
@@ -13,13 +13,14 @@ namespace WorkerService
 {
     public class Worker : BackgroundService
     {
-        private readonly ILogger<Worker> _logger;
         private readonly IWindowManagementService _windowService;
         private readonly IConfiguration _configuration;
+        private readonly ILogger<Worker> _logger;
 
-        // Интервалы
-        private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(20);
-        private readonly TimeSpan _retryInterval = TimeSpan.FromSeconds(30);
+        private const string RegistryAppName = "TaskLockerAgent";
+
+        // Флаг: мы работаем как Служба (SYSTEM) или как Агент (User)?
+        private bool _isSystemService = false;
 
         public Worker(ILogger<Worker> logger, IWindowManagementService windowService, IConfiguration configuration)
         {
@@ -28,65 +29,89 @@ namespace WorkerService
             _configuration = configuration;
         }
 
+        public override Task StartAsync(CancellationToken cancellationToken)
+        {
+            // Проверяем, кто мы: SYSTEM или Пользователь
+            string user = Environment.UserName;
+            _isSystemService = user.Contains("SYSTEM", StringComparison.OrdinalIgnoreCase) ||
+                               user.Contains("$"); // Аккаунты служб часто заканчиваются на $
+
+            if (_isSystemService)
+            {
+                // ЛОГИКА СЛУЖБЫ: Включить автозагрузку для всех
+                SetGlobalStartup(true);
+            }
+
+            return base.StartAsync(cancellationToken);
+        }
+
+        public override Task StopAsync(CancellationToken cancellationToken)
+        {
+            if (_isSystemService)
+            {
+                // ЛОГИКА СЛУЖБЫ: Службу останавливают -> Отключаем автозагрузку
+                SetGlobalStartup(false);
+            }
+
+            return base.StopAsync(cancellationToken);
+        }
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            LogToFile("Служба запущена.");
+            // Если мы SYSTEM, нам не нужно показывать окна, мы только управляем автозапуском.
+            // Но чтобы не усложнять, пусть код идет дальше, в Session 0 окна просто не покажутся.
 
-            // 1. Прописываемся в автозагрузку при старте
-            RegisterInStartup();
+            // Если мы Пользователь (Агент), мы показываем окна.
 
-            // Даем системе прогрузиться
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            await Task.Delay(5000, stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                try
+                // ... ВАША ЛОГИКА БЛОКИРОВКИ ...
+                if (!_isSystemService && IsUserAllowed()) // Проверяем юзера только если мы не служба
                 {
-                    if (IsUserAllowed())
+                    System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
                     {
-                        LogToFile("Пользователь в списке. Показываем окно.");
+                        if (!_windowService.IsShutdownDialogVisible())
+                            _windowService.ShowShutdownDialog();
+                    });
 
-                        // Вызов окна в UI потоке
-                        System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
-                        {
-                            try
-                            {
-                                if (!_windowService.IsShutdownDialogVisible())
-                                {
-                                    _windowService.ShowShutdownDialog();
-                                }
-                            }
-                            catch (Exception uiEx)
-                            {
-                                LogToFile($"Ошибка UI: {uiEx.Message}");
-                            }
-                        });
-
-                        // Ждем до следующей проверки
-                        TimeSpan delay = _windowService.NextShowDelay > TimeSpan.Zero
-                            ? _windowService.NextShowDelay
-                            : _checkInterval;
-
-                        if (_windowService.NextShowDelay > TimeSpan.Zero)
-                            _windowService.NextShowDelay = TimeSpan.Zero;
-
-                        await Task.Delay(delay, stoppingToken);
-                    }
-                    else
-                    {
-                        // Пользователь не найден
-                        await Task.Delay(_retryInterval, stoppingToken);
-                    }
+                    // ... ожидание ...
+                    await Task.Delay(_windowService.NextShowDelay, stoppingToken);
                 }
-                catch (Exception ex)
+                else
                 {
-                    LogToFile($"Критическая ошибка: {ex.Message}");
-                    await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
                 }
             }
         }
 
-        // --- ВОТ ЭТИ МЕТОДЫ БЫЛИ ПОТЕРЯНЫ ---
+        // --- УПРАВЛЕНИЕ РЕЕСТРОМ (ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ) ---
+        private void SetGlobalStartup(bool enable)
+        {
+            try
+            {
+                // HKLM требует прав SYSTEM или Admin (у службы они есть)
+                using var key = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+                if (key == null) return;
+
+                if (enable)
+                {
+                    string exePath = Environment.ProcessPath;
+                    key.SetValue(RegistryAppName, exePath);
+                }
+                else
+                {
+                    // Удаляем запись
+                    if (key.GetValue(RegistryAppName) != null)
+                        key.DeleteValue(RegistryAppName, false);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Registry Error: {ex.Message}");
+            }
+        }
 
         private bool IsUserAllowed()
         {
@@ -124,32 +149,6 @@ namespace WorkerService
                 return false;
             }
         }
-
-        private void RegisterInStartup()
-        {
-            try
-            {
-                string? exePath = Environment.ProcessPath;
-                if (string.IsNullOrEmpty(exePath)) return;
-
-                using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-                if (key != null)
-                {
-                    string appName = "TaskLockerService";
-                    var existingValue = key.GetValue(appName) as string;
-                    if (existingValue != exePath)
-                    {
-                        key.SetValue(appName, exePath);
-                        LogToFile($"Автозапуск обновлен: {exePath}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogToFile($"Ошибка автозапуска: {ex.Message}");
-            }
-        }
-
         private void LogToFile(string message)
         {
             try

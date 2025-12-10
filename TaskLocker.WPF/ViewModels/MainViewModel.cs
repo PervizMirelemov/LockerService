@@ -25,7 +25,7 @@ namespace TaskLocker.WPF.ViewModels
         private void Ok()
         {
             // 1. Читаем то же самое время из настроек
-            int minutes = _configuration.GetValue<int>("IntervalMinutes", 20);
+            int minutes = _configuration.GetValue<int>("IntervalMinutes",20);
 
             // 2. Говорим сервису: "В следующий раз покажись через N минут"
             _windowService.NextShowDelay = TimeSpan.FromMinutes(minutes);

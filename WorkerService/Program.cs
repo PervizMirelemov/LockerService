@@ -14,99 +14,84 @@ public class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        // ==========================================
-        // 1. РЕЖИМ УСТАНОВКИ (Запускается установщиком)
-        // ==========================================
+        // 1. ЛОГИКА ДЛЯ УСТАНОВЩИКА (Создание Службы)
         if (args.Contains("/Install"))
         {
-            InstallService();
-            return; // <--- ВАЖНО: Выходим сразу! Установка завершится успешно.
+            InstallWindowsService();
+            return; // Выходим, установщик доволен
         }
 
         if (args.Contains("/Uninstall"))
         {
-            UninstallService();
-            return; // <--- ВАЖНО: Выходим!
+            UninstallWindowsService();
+            return;
         }
 
-        // ==========================================
-        // 2. РЕЖИМ СЛУЖБЫ (Запускается Windows)
-        // ==========================================
+        // 2. ЗАПУСК ПРИЛОЖЕНИЯ (И Службы, и Агента)
         var builder = Host.CreateApplicationBuilder(args);
 
-        // Настройка службы
         builder.Services.AddWindowsService(options =>
         {
             options.ServiceName = "TaskLockerService";
         });
 
-        // Регистрация WPF (чтобы окна работали)
+        // WPF Сервисы
         builder.Services.AddSingleton<IWindowManagementService, PInvokeWindowService>();
         builder.Services.AddTransient<MainViewModel>();
         builder.Services.AddSingleton<App>();
 
-        // Регистрация логики (Воркер)
+        // Логика (Воркер)
         builder.Services.AddHostedService<Worker>();
 
         var host = builder.Build();
+        host.Start();
 
-        host.Start(); // Запуск фона
-
-        // Запуск UI
+        // Запускаем UI только если это НЕ системная служба (чтобы не грузить Session 0)
+        // Но для упрощения можно оставить запуск всегда, в Session 0 просто не будет окон.
         var app = host.Services.GetRequiredService<App>();
-        // app.InitializeComponent(); // Если удалил App.xaml, закомментируй это
+        // app.InitializeComponent(); // Если нужно
         app.Run();
 
         host.StopAsync().Wait();
     }
 
-    // --- ФУНКЦИИ ДЛЯ CMD (sc.exe) ---
-
-    static void InstallService()
+    // --- УПРАВЛЕНИЕ СЛУЖБОЙ (SC.EXE) ---
+    static void InstallWindowsService()
     {
         try
         {
             string exePath = Environment.ProcessPath;
-            // Кавычки нужны, если путь содержит пробелы (Program Files)
-            string binPath = $"\"{exePath}\"";
+            string binPath = $"\"{exePath}\""; // Кавычки обязательны!
             string serviceName = "TaskLockerService";
-            string displayName = "Task Locker Service";
 
-            // 1. Удаляем старую (на всякий случай)
-            RunSc($"stop \"{serviceName}\"");
-            RunSc($"delete \"{serviceName}\"");
-
-            // 2. Создаем новую
-            RunSc($"create \"{serviceName}\" binPath= {binPath} start= auto DisplayName= \"{displayName}\"");
-
-            // 3. Настраиваем авто-перезапуск при сбое
+            // Создаем службу
+            RunSc($"create \"{serviceName}\" binPath= {binPath} start= auto DisplayName= \"Task Locker Controller\"");
+            // Настраиваем перезапуск
             RunSc($"failure \"{serviceName}\" reset= 0 actions= restart/60000");
-
-            // 4. Запускаем
+            // Запускаем
             RunSc($"start \"{serviceName}\"");
         }
         catch { }
     }
 
-    static void UninstallService()
+    static void UninstallWindowsService()
     {
         try
         {
-            string serviceName = "TaskLockerService";
-            RunSc($"stop \"{serviceName}\"");
-            RunSc($"delete \"{serviceName}\"");
+            RunSc("stop \"TaskLockerService\"");
+            RunSc("delete \"TaskLockerService\"");
         }
         catch { }
     }
 
     static void RunSc(string arguments)
     {
-        var process = new Process();
-        process.StartInfo.FileName = "sc.exe";
-        process.StartInfo.Arguments = arguments;
-        process.StartInfo.UseShellExecute = false;
-        process.StartInfo.CreateNoWindow = true;
-        process.Start();
-        process.WaitForExit();
+        var p = new Process();
+        p.StartInfo.FileName = "sc.exe";
+        p.StartInfo.Arguments = arguments;
+        p.StartInfo.UseShellExecute = false;
+        p.StartInfo.CreateNoWindow = true;
+        p.Start();
+        p.WaitForExit();
     }
 }

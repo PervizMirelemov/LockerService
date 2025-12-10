@@ -7,7 +7,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TaskLocker.WPF", "TaskLocke
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WorkerService", "..\WorkerService\WorkerService.csproj", "{0B95992C-1B93-4778-8C5E-2F9675EB7F23}"
 EndProject
-Project("{54435603-DBB4-11D2-8724-00A0C9A8B90C}") = "TaskLockerİnstaller", "..\TaskLockerİnstaller\TaskLockerİnstaller.vdproj", "{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}"
+Project("{54435603-DBB4-11D2-8724-00A0C9A8B90C}") = "TaskLockerInstaller", "..\TaskLockerInstaller\TaskLockerInstaller.vdproj", "{1B053921-6B17-064C-B24D-D8BEF421DC91}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -43,12 +43,12 @@ Global
 		{0B95992C-1B93-4778-8C5E-2F9675EB7F23}.Release|x64.Build.0 = Release|Any CPU
 		{0B95992C-1B93-4778-8C5E-2F9675EB7F23}.Release|x86.ActiveCfg = Release|Any CPU
 		{0B95992C-1B93-4778-8C5E-2F9675EB7F23}.Release|x86.Build.0 = Release|Any CPU
-		{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}.Debug|Any CPU.ActiveCfg = Debug
-		{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}.Debug|x64.ActiveCfg = Debug
-		{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}.Debug|x86.ActiveCfg = Debug
-		{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}.Release|Any CPU.ActiveCfg = Release
-		{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}.Release|x64.ActiveCfg = Release
-		{15ADB2A5-E6D2-30C4-29FD-DA0FF6056F42}.Release|x86.ActiveCfg = Release
+		{1B053921-6B17-064C-B24D-D8BEF421DC91}.Debug|Any CPU.ActiveCfg = Debug
+		{1B053921-6B17-064C-B24D-D8BEF421DC91}.Debug|x64.ActiveCfg = Debug
+		{1B053921-6B17-064C-B24D-D8BEF421DC91}.Debug|x86.ActiveCfg = Debug
+		{1B053921-6B17-064C-B24D-D8BEF421DC91}.Release|Any CPU.ActiveCfg = Release
+		{1B053921-6B17-064C-B24D-D8BEF421DC91}.Release|x64.ActiveCfg = Release
+		{1B053921-6B17-064C-B24D-D8BEF421DC91}.Release|x86.ActiveCfg = Release
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

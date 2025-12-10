@@ -1,11 +1,15 @@
-﻿using System.Windows;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows; // Для Window, WindowState и т.д.
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using TaskLocker.WPF.Native;
 using TaskLocker.WPF.ViewModels;
 using TaskLocker.WPF.Views;
 
-// Псевдонимы
-using Application = System.Windows.Application;
+// Псевдоним для WinForms
 using WinForms = System.Windows.Forms;
 
 namespace TaskLocker.WPF.Services
@@ -37,7 +41,8 @@ namespace TaskLocker.WPF.Services
         {
             _logger.LogInformation("Starting pseudo-lock for {Duration} seconds.", duration.TotalSeconds);
 
-            var dispatcher = Application.Current?.Dispatcher;
+            // ИСПРАВЛЕНО: Явное указание System.Windows.Application
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null) return;
 
             await dispatcher.InvokeAsync(async () =>
@@ -82,13 +87,14 @@ namespace TaskLocker.WPF.Services
                     }
                 }
                 _lockWindows.Clear();
-                _logger.LogInformation("Pseudo-lock finished. System unlocked.");
+                _logger.LogInformation("Pseudo-lock finished.");
             });
         }
 
         public void ShowShutdownDialog()
         {
-            var dispatcher = Application.Current?.Dispatcher;
+            // ИСПРАВЛЕНО: Явное указание System.Windows.Application
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher != null)
                 dispatcher.Invoke(ShowFallbackDialogInternal);
         }
@@ -132,7 +138,8 @@ namespace TaskLocker.WPF.Services
 
         public void HideShutdownDialog()
         {
-            var dispatcher = Application.Current?.Dispatcher;
+            // ИСПРАВЛЕНО: Явное указание System.Windows.Application
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
             Action closeAction = () =>
             {
                 lock (_dialogLock)
@@ -148,12 +155,12 @@ namespace TaskLocker.WPF.Services
             };
 
             if (dispatcher != null) dispatcher.Invoke(closeAction);
-            else closeAction();
         }
 
         public bool IsShutdownDialogVisible()
         {
-            var dispatcher = Application.Current?.Dispatcher;
+            // ИСПРАВЛЕНО: Явное указание System.Windows.Application
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher != null)
             {
                 return dispatcher.Invoke(() =>
@@ -161,5 +168,8 @@ namespace TaskLocker.WPF.Services
             }
             return false;
         }
+
+        // Заглушка
+        public bool LockWorkStation() { return true; }
     }
 }
