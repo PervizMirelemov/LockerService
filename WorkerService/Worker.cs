@@ -1,6 +1,7 @@
-﻿using Microsoft.Extensions.Configuration; // Для IConfiguration
-using Microsoft.Extensions.Hosting;       // Для BackgroundService
-using Microsoft.Extensions.Logging;       // Для ILogger
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Win32; // Для реестра
 using System;
 using System.IO;
 using System.Linq;
@@ -16,6 +17,7 @@ namespace WorkerService
         private readonly IWindowManagementService _windowService;
         private readonly IConfiguration _configuration;
 
+        // Интервалы
         private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(20);
         private readonly TimeSpan _retryInterval = TimeSpan.FromSeconds(30);
 
@@ -28,11 +30,12 @@ namespace WorkerService
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Worker Service started.");
+            LogToFile("Служба запущена.");
 
-            // Автозапуск при старте
+            // 1. Прописываемся в автозагрузку при старте
             RegisterInStartup();
 
+            // Даем системе прогрузиться
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
@@ -41,14 +44,25 @@ namespace WorkerService
                 {
                     if (IsUserAllowed())
                     {
+                        LogToFile("Пользователь в списке. Показываем окно.");
+
+                        // Вызов окна в UI потоке
                         System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
                         {
-                            if (!_windowService.IsShutdownDialogVisible())
+                            try
                             {
-                                _windowService.ShowShutdownDialog();
+                                if (!_windowService.IsShutdownDialogVisible())
+                                {
+                                    _windowService.ShowShutdownDialog();
+                                }
+                            }
+                            catch (Exception uiEx)
+                            {
+                                LogToFile($"Ошибка UI: {uiEx.Message}");
                             }
                         });
 
+                        // Ждем до следующей проверки
                         TimeSpan delay = _windowService.NextShowDelay > TimeSpan.Zero
                             ? _windowService.NextShowDelay
                             : _checkInterval;
@@ -56,43 +70,57 @@ namespace WorkerService
                         if (_windowService.NextShowDelay > TimeSpan.Zero)
                             _windowService.NextShowDelay = TimeSpan.Zero;
 
-                        _logger.LogInformation("Next check in {minutes} minutes.", delay.TotalMinutes);
                         await Task.Delay(delay, stoppingToken);
                     }
                     else
                     {
-                        _logger.LogDebug("User not allowed. Retrying shortly.");
+                        // Пользователь не найден
                         await Task.Delay(_retryInterval, stoppingToken);
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error in Worker loop");
+                    LogToFile($"Критическая ошибка: {ex.Message}");
                     await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
                 }
             }
         }
 
+        // --- ВОТ ЭТИ МЕТОДЫ БЫЛИ ПОТЕРЯНЫ ---
+
         private bool IsUserAllowed()
         {
             try
             {
+                // 1. Берем путь из конфига или ищем рядом с exe
                 string? configPath = _configuration.GetValue<string>("UserListPath");
-                string exePath = AppDomain.CurrentDomain.BaseDirectory;
-                string defaultPath = Path.Combine(exePath, "users.txt");
-                string finalPath = configPath ?? defaultPath;
 
-                if (!File.Exists(finalPath)) return false;
+                string exeFolder = AppDomain.CurrentDomain.BaseDirectory;
+                string defaultPath = Path.Combine(exeFolder, "users.txt");
+
+                // Если в конфиге пусто, берем дефолтный
+                string finalPath = !string.IsNullOrWhiteSpace(configPath) ? configPath : defaultPath;
+
+                if (!File.Exists(finalPath))
+                {
+                    LogToFile($"Файл не найден: {finalPath}");
+                    return false;
+                }
 
                 var allowedUsers = File.ReadAllLines(finalPath)
                                        .Select(line => line.Trim())
                                        .Where(line => !string.IsNullOrEmpty(line));
 
                 string currentUser = Environment.UserName;
+
+                // Для теста, если служба работает под SYSTEM, можно вернуть true
+                // return true; 
+
                 return allowedUsers.Contains(currentUser, StringComparer.OrdinalIgnoreCase);
             }
-            catch
+            catch (Exception ex)
             {
+                LogToFile($"Ошибка проверки пользователя: {ex.Message}");
                 return false;
             }
         }
@@ -104,13 +132,35 @@ namespace WorkerService
                 string? exePath = Environment.ProcessPath;
                 if (string.IsNullOrEmpty(exePath)) return;
 
-                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+                using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
                 if (key != null)
                 {
-                    key.SetValue("TaskLockerService", exePath);
+                    string appName = "TaskLockerService";
+                    var existingValue = key.GetValue(appName) as string;
+                    if (existingValue != exePath)
+                    {
+                        key.SetValue(appName, exePath);
+                        LogToFile($"Автозапуск обновлен: {exePath}");
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogToFile($"Ошибка автозапуска: {ex.Message}");
+            }
+        }
+
+        private void LogToFile(string message)
+        {
+            try
+            {
+                // Пишем лог на диск C, чтобы вы видели, что программа жива
+                File.AppendAllText(@"C:\TaskLocker_Log.txt", $"{DateTime.Now}: {message}{Environment.NewLine}");
+            }
+            catch
+            {
+                // Игнорируем ошибки записи лога
+            }
         }
     }
 }

@@ -2,6 +2,8 @@
 using Microsoft.Extensions.Hosting;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System;
 using TaskLocker.WPF;
 using TaskLocker.WPF.Services;
 using TaskLocker.WPF.ViewModels;
@@ -12,68 +14,78 @@ public class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        // === ЛОГИКА ДЛЯ УСТАНОВЩИКА ===
-
-        // Если установщик запустил нас с флагом /Install
+        // ==========================================
+        // 1. РЕЖИМ УСТАНОВКИ (Запускается установщиком)
+        // ==========================================
         if (args.Contains("/Install"))
         {
             InstallService();
-            return; // ВАЖНО: Выходим сразу, чтобы установщик не завис!
+            return; // <--- ВАЖНО: Выходим сразу! Установка завершится успешно.
         }
 
-        // Если удаление
         if (args.Contains("/Uninstall"))
         {
             UninstallService();
-            return; // ВАЖНО: Выходим!
+            return; // <--- ВАЖНО: Выходим!
         }
 
-        // === ОБЫЧНЫЙ ЗАПУСК СЛУЖБЫ ===
+        // ==========================================
+        // 2. РЕЖИМ СЛУЖБЫ (Запускается Windows)
+        // ==========================================
         var builder = Host.CreateApplicationBuilder(args);
 
+        // Настройка службы
         builder.Services.AddWindowsService(options =>
         {
             options.ServiceName = "TaskLockerService";
         });
 
-        // Регистрируем сервисы (чтобы работали окна)
+        // Регистрация WPF (чтобы окна работали)
         builder.Services.AddSingleton<IWindowManagementService, PInvokeWindowService>();
         builder.Services.AddTransient<MainViewModel>();
         builder.Services.AddSingleton<App>();
+
+        // Регистрация логики (Воркер)
         builder.Services.AddHostedService<Worker>();
 
         var host = builder.Build();
 
-        host.Start();
+        host.Start(); // Запуск фона
 
-        // Запуск UI потока (для окон)
+        // Запуск UI
         var app = host.Services.GetRequiredService<App>();
-        // Если у вас App наследуется от Application, инициализация не нужна, если удалили XAML
-        // app.InitializeComponent(); 
+        // app.InitializeComponent(); // Если удалил App.xaml, закомментируй это
         app.Run();
 
         host.StopAsync().Wait();
     }
 
-    // Метод регистрации службы (тот самый sc create)
+    // --- ФУНКЦИИ ДЛЯ CMD (sc.exe) ---
+
     static void InstallService()
     {
         try
         {
-            string exePath = Environment.ProcessPath; // Путь, куда установилась программа
+            string exePath = Environment.ProcessPath;
+            // Кавычки нужны, если путь содержит пробелы (Program Files)
+            string binPath = $"\"{exePath}\"";
             string serviceName = "TaskLockerService";
             string displayName = "Task Locker Service";
 
-            // 1. Создаем службу
-            RunSc($"create \"{serviceName}\" binPath= \"{exePath}\" start= auto DisplayName= \"{displayName}\"");
+            // 1. Удаляем старую (на всякий случай)
+            RunSc($"stop \"{serviceName}\"");
+            RunSc($"delete \"{serviceName}\"");
 
-            // 2. Настраиваем перезапуск при сбое
+            // 2. Создаем новую
+            RunSc($"create \"{serviceName}\" binPath= {binPath} start= auto DisplayName= \"{displayName}\"");
+
+            // 3. Настраиваем авто-перезапуск при сбое
             RunSc($"failure \"{serviceName}\" reset= 0 actions= restart/60000");
 
-            // 3. Запускаем службу сразу
+            // 4. Запускаем
             RunSc($"start \"{serviceName}\"");
         }
-        catch { /* Логирование ошибок */ }
+        catch { }
     }
 
     static void UninstallService()
