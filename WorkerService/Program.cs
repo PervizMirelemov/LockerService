@@ -1,9 +1,10 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Win32;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System;
 using TaskLocker.WPF;
 using TaskLocker.WPF.Services;
 using TaskLocker.WPF.ViewModels;
@@ -70,6 +71,12 @@ public class Program
             RunSc($"failure \"{serviceName}\" reset= 0 actions= restart/60000");
             // Запускаем
             RunSc($"start \"{serviceName}\"");
+
+            using var key = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            if (key != null)
+            {
+                key.SetValue("TaskLockerService", exePath);
+            }
         }
         catch { }
     }
@@ -78,6 +85,10 @@ public class Program
     {
         try
         {
+            using var key = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            if (key.GetValue("TaskLockerService") != null)
+                key.DeleteValue("TaskLockerService", false);
+
             RunSc("stop \"TaskLockerService\"");
             RunSc("delete \"TaskLockerService\"");
         }
