@@ -6,6 +6,8 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<UseWPF>true</UseWPF>
 		<OutputType>WinExe</OutputType>
+		<PlatformTarget>x64</PlatformTarget>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -16,10 +18,15 @@
 	<ItemGroup>
 		<ProjectReference Include="..\TaskLocker.WPF\TaskLocker.WPF.csproj" />
 	</ItemGroup>
-	
-	<Target Name="KillRunningExe" BeforeTargets="BeforeBuild" Condition="'$(OS)' == 'Windows_NT'">
+
+	<Target Name="StopServiceBeforeBuild" BeforeTargets="BeforeBuild" Condition="'$(OS)' == 'Windows_NT'">
+		<Exec Command="sc stop TaskLockerService" ContinueOnError="true" IgnoreExitCode="true" />
+
+		<Exec Command="ping 127.0.0.1 -n 4 > nul" ContinueOnError="true" IgnoreExitCode="true" />
+
 		<Exec Command="taskkill /F /IM TaskLocker.WPF.exe" ContinueOnError="true" IgnoreExitCode="true" />
+
 		<Exec Command="taskkill /F /IM WorkerService.exe" ContinueOnError="true" IgnoreExitCode="true" />
 	</Target>
-	
+
 </Project>

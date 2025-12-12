@@ -17,8 +17,13 @@ namespace WorkerService
         private readonly IConfiguration _configuration;
         private readonly ILogger<Worker> _logger;
 
-        // НОВОЕ ИМЯ: Чтобы сбросить любые старые настройки "Disabled"
-        private const string RegistryName = "TaskLocker_Auto";
+        private const string CurrentRegistryName = "TaskLocker_Auto";
+
+        // Старые имена для очистки
+        private readonly string[] _legacyNames = new[]
+        {
+            "TaskLockerService", "TaskLocker_Global", "WorkerService", "TaskLocker"
+        };
 
         private bool _isSystemService = false;
 
@@ -27,36 +32,60 @@ namespace WorkerService
             _logger = logger;
             _windowService = windowService;
             _configuration = configuration;
-            LogToFile("Worker initialized (64-bit mode).");
+            LogToFile(">>> SERVICE INITIALIZED <<<");
         }
 
-        public override Task StartAsync(CancellationToken cancellationToken)
+        public override async Task StartAsync(CancellationToken cancellationToken)
         {
             string user = Environment.UserName;
+            // Определяем, работаем ли мы от имени Системы (Служба)
             _isSystemService = user.Contains("SYSTEM", StringComparison.OrdinalIgnoreCase) || user.Contains("$");
 
-            LogToFile($"StartAsync called. User: {user}, IsSystem: {_isSystemService}");
+            LogToFile($"[START] StartAsync called. User: {user}, IsSystem: {_isSystemService}");
 
             if (_isSystemService)
             {
-                // ВКЛЮЧАЕМ автозагрузку
+                // При старте: удаляем мусор и ставим правильный ключ
+                CleanupAllRegistryKeys();
                 SetGlobalStartup(true);
             }
 
-            return base.StartAsync(cancellationToken);
+            await base.StartAsync(cancellationToken);
         }
 
-        public override Task StopAsync(CancellationToken cancellationToken)
+        public override async Task StopAsync(CancellationToken cancellationToken)
         {
-            LogToFile("StopAsync called.");
+            LogToFile("[STOP] StopAsync called! Initiating cleanup...");
 
             if (_isSystemService)
             {
-                // ОТКЛЮЧАЕМ автозагрузку
-                SetGlobalStartup(false);
+                try
+                {
+                    // 1. Пытаемся удалить ключи
+                    CleanupAllRegistryKeys();
+
+                    // 2. ПРОВЕРКА: Действительно ли удалилось?
+                    bool exists = CheckIfKeyExists();
+                    if (exists)
+                    {
+                        LogToFile("[STOP FAILED] WARNING! The key still exists after cleanup!");
+                    }
+                    else
+                    {
+                        LogToFile("[STOP SUCCESS] Verification passed: Key is gone from Registry.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"[STOP ERROR] Exception during StopAsync: {ex}");
+                }
+            }
+            else
+            {
+                LogToFile("[STOP] Not a System Service, skipping registry cleanup.");
             }
 
-            return base.StopAsync(cancellationToken);
+            await base.StopAsync(cancellationToken);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -67,6 +96,7 @@ namespace WorkerService
 
                 while (!stoppingToken.IsCancellationRequested)
                 {
+                    // Логика блокировки для пользователя
                     if (!_isSystemService && IsUserAllowed())
                     {
                         System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
@@ -83,75 +113,99 @@ namespace WorkerService
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                LogToFile("[EXECUTE] Task cancelled (Service stopping).");
+            }
             catch (Exception ex)
             {
-                LogToFile($"Error in ExecuteAsync: {ex.Message}");
+                LogToFile($"[EXECUTE ERROR] {ex.Message}");
             }
         }
 
-        // --- ЛОГИКА АВТОЗАГРУЗКИ (64-BIT FIX) ---
+        // --- РАБОТА С РЕЕСТРОМ ---
+
+        private void CleanupAllRegistryKeys()
+        {
+            var views = new[] { RegistryView.Registry64, RegistryView.Registry32 };
+
+            foreach (var view in views)
+            {
+                try
+                {
+                    using var localMachine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+                    using var key = localMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+
+                    if (key != null)
+                    {
+                        // Удаляем старые имена
+                        foreach (var oldName in _legacyNames)
+                        {
+                            if (key.GetValue(oldName) != null)
+                            {
+                                key.DeleteValue(oldName, false);
+                                LogToFile($"[CLEANUP] Deleted legacy '{oldName}' from {view}");
+                            }
+                        }
+
+                        // Удаляем текущее имя (для StopAsync или пересоздания)
+                        if (key.GetValue(CurrentRegistryName) != null)
+                        {
+                            key.DeleteValue(CurrentRegistryName, false);
+                            LogToFile($"[CLEANUP] Deleted CURRENT '{CurrentRegistryName}' from {view}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"[CLEANUP ERROR] View {view}: {ex.Message}");
+                }
+            }
+        }
+
         private void SetGlobalStartup(bool enable)
+        {
+            // Если нужно включить - пишем ключ. (Если выключить - мы его уже удалили в Cleanup)
+            if (enable)
+            {
+                try
+                {
+                    using var localMachine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+                    using var key = localMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+
+                    if (key != null)
+                    {
+                        string exePath = Environment.ProcessPath ?? "";
+                        key.SetValue(CurrentRegistryName, exePath);
+                        LogToFile($"[SET] Created key '{CurrentRegistryName}' -> '{exePath}'");
+                    }
+
+                    // Сброс StartupApproved (чтобы было Enabled)
+                    using var approvedKey = localMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run", true);
+                    if (approvedKey != null && approvedKey.GetValue(CurrentRegistryName) != null)
+                    {
+                        approvedKey.DeleteValue(CurrentRegistryName, false);
+                        LogToFile("[SET] Cleared StartupApproved (Forced Enable).");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"[SET ERROR] {ex.Message}");
+                }
+            }
+        }
+
+        private bool CheckIfKeyExists()
         {
             try
             {
-                LogToFile($"SetGlobalStartup: {enable}");
-
-                string runKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-                string approvedKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
-
-                // ГЛАВНОЕ ИЗМЕНЕНИЕ: Используем RegistryView.Registry64
-                // Это заставляет писать в реальный HKLM, а не в Wow6432Node
                 using var localMachine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-
-                // 1. Управление ключом RUN
-                using (var key = localMachine.OpenSubKey(runKeyPath, true))
-                {
-                    if (key != null)
-                    {
-                        if (enable)
-                        {
-                            string exePath = Environment.ProcessPath ?? "";
-                            if (!string.IsNullOrEmpty(exePath))
-                            {
-                                key.SetValue(RegistryName, exePath);
-                                LogToFile($"Registry (64-bit) SET {RegistryName} -> {exePath}");
-                            }
-                        }
-                        else
-                        {
-                            if (key.GetValue(RegistryName) != null)
-                            {
-                                key.DeleteValue(RegistryName, false);
-                                LogToFile($"Registry (64-bit) DELETED {RegistryName}");
-                            }
-                        }
-                    }
-                    else
-                    {
-                        LogToFile("Error: Could not open HKLM Run key (64-bit view).");
-                    }
-                }
-
-                // 2. СБРОС StartupApproved (Тоже в 64-bit)
-                if (enable)
-                {
-                    try
-                    {
-                        using (var approvedKey = localMachine.OpenSubKey(approvedKeyPath, true))
-                        {
-                            if (approvedKey != null && approvedKey.GetValue(RegistryName) != null)
-                            {
-                                approvedKey.DeleteValue(RegistryName, false);
-                                LogToFile("Cleared 'StartupApproved' status in 64-bit registry.");
-                            }
-                        }
-                    }
-                    catch { }
-                }
+                using var key = localMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
+                return key?.GetValue(CurrentRegistryName) != null;
             }
-            catch (Exception ex)
+            catch
             {
-                LogToFile($"CRITICAL REGISTRY ERROR: {ex}");
+                return false;
             }
         }
 
