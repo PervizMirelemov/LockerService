@@ -15,8 +15,4 @@
 		<PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
 	</ItemGroup>
 
-	<Target Name="KillRunningExe" BeforeTargets="BeforeBuild" Condition="'$(OS)' == 'Windows_NT'">
-		<Exec Command="taskkill /F /IM WorkerService.exe" ContinueOnError="true" IgnoreExitCode="true" />
-		<Exec Command="taskkill /F /IM TaskLocker.WPF.exe" ContinueOnError="true" IgnoreExitCode="true" />
-	</Target>
 </Project>

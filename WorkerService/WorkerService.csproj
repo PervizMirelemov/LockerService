@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Worker">
+﻿<Project Sdk="Microsoft.NET.Sdk.Worker">
 
 	<PropertyGroup>
 		<TargetFramework>net8.0-windows</TargetFramework>
@@ -20,13 +20,7 @@
 	</ItemGroup>
 
 	<Target Name="StopServiceBeforeBuild" BeforeTargets="BeforeBuild" Condition="'$(OS)' == 'Windows_NT'">
-		<Exec Command="sc stop TaskLockerService" ContinueOnError="true" IgnoreExitCode="true" />
-
-		<Exec Command="ping 127.0.0.1 -n 4 > nul" ContinueOnError="true" IgnoreExitCode="true" />
-
-		<Exec Command="taskkill /F /IM TaskLocker.WPF.exe" ContinueOnError="true" IgnoreExitCode="true" />
-
-		<Exec Command="taskkill /F /IM WorkerService.exe" ContinueOnError="true" IgnoreExitCode="true" />
+		<Exec Command="net stop TaskLockerService /y" ContinueOnError="true" IgnoreExitCode="true" />
 	</Target>
 
 </Project>
