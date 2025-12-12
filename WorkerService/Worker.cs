@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32; // Реестр
+using Microsoft.Win32;
 using System;
 using System.IO;
 using System.Linq;
@@ -17,9 +17,9 @@ namespace WorkerService
         private readonly IConfiguration _configuration;
         private readonly ILogger<Worker> _logger;
 
-        private const string RegistryAppName = "TaskLockerAgent";
+        // НОВОЕ ИМЯ: Чтобы сбросить любые старые настройки "Disabled"
+        private const string RegistryName = "TaskLocker_Auto";
 
-        // Флаг: мы работаем как Служба (SYSTEM) или как Агент (User)?
         private bool _isSystemService = false;
 
         public Worker(ILogger<Worker> logger, IWindowManagementService windowService, IConfiguration configuration)
@@ -27,18 +27,19 @@ namespace WorkerService
             _logger = logger;
             _windowService = windowService;
             _configuration = configuration;
+            LogToFile("Worker initialized (64-bit mode).");
         }
 
         public override Task StartAsync(CancellationToken cancellationToken)
         {
-            // Проверяем, кто мы: SYSTEM или Пользователь
             string user = Environment.UserName;
-            _isSystemService = user.Contains("SYSTEM", StringComparison.OrdinalIgnoreCase) ||
-                               user.Contains("$"); // Аккаунты служб часто заканчиваются на $
+            _isSystemService = user.Contains("SYSTEM", StringComparison.OrdinalIgnoreCase) || user.Contains("$");
+
+            LogToFile($"StartAsync called. User: {user}, IsSystem: {_isSystemService}");
 
             if (_isSystemService)
             {
-                // ЛОГИКА СЛУЖБЫ: Включить автозагрузку для всех
+                // ВКЛЮЧАЕМ автозагрузку
                 SetGlobalStartup(true);
             }
 
@@ -47,9 +48,11 @@ namespace WorkerService
 
         public override Task StopAsync(CancellationToken cancellationToken)
         {
+            LogToFile("StopAsync called.");
+
             if (_isSystemService)
             {
-                // ЛОГИКА СЛУЖБЫ: Службу останавливают -> Отключаем автозагрузку
+                // ОТКЛЮЧАЕМ автозагрузку
                 SetGlobalStartup(false);
             }
 
@@ -58,58 +61,97 @@ namespace WorkerService
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            // Если мы SYSTEM, нам не нужно показывать окна, мы только управляем автозапуском.
-            // Но чтобы не усложнять, пусть код идет дальше, в Session 0 окна просто не покажутся.
-
-            // Если мы Пользователь (Агент), мы показываем окна.
-
-            await Task.Delay(5000, stoppingToken);
-
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                // ... ВАША ЛОГИКА БЛОКИРОВКИ ...
-                if (!_isSystemService && IsUserAllowed()) // Проверяем юзера только если мы не служба
-                {
-                    System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
-                    {
-                        if (!_windowService.IsShutdownDialogVisible())
-                            _windowService.ShowShutdownDialog();
-                    });
-
-                    // ... ожидание ...
-                    await Task.Delay(_windowService.NextShowDelay, stoppingToken);
-                }
-                else
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-                }
-            }
-        }
-
-        // --- УПРАВЛЕНИЕ РЕЕСТРОМ (ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ) ---
-        private void SetGlobalStartup(bool enable)
-        {
             try
             {
-                // HKLM требует прав SYSTEM или Admin (у службы они есть)
-                using var key = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-                if (key == null) return;
+                await Task.Delay(3000, stoppingToken);
 
-                if (enable)
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    string exePath = Environment.ProcessPath;
-                    key.SetValue(RegistryAppName, exePath);
-                }
-                else
-                {
-                    // Удаляем запись
-                    if (key.GetValue(RegistryAppName) != null)
-                        key.DeleteValue(RegistryAppName, false);
+                    if (!_isSystemService && IsUserAllowed())
+                    {
+                        System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
+                        {
+                            if (!_windowService.IsShutdownDialogVisible())
+                                _windowService.ShowShutdownDialog();
+                        });
+
+                        await Task.Delay(_windowService.NextShowDelay, stoppingToken);
+                    }
+                    else
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Registry Error: {ex.Message}");
+                LogToFile($"Error in ExecuteAsync: {ex.Message}");
+            }
+        }
+
+        // --- ЛОГИКА АВТОЗАГРУЗКИ (64-BIT FIX) ---
+        private void SetGlobalStartup(bool enable)
+        {
+            try
+            {
+                LogToFile($"SetGlobalStartup: {enable}");
+
+                string runKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+                string approvedKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+
+                // ГЛАВНОЕ ИЗМЕНЕНИЕ: Используем RegistryView.Registry64
+                // Это заставляет писать в реальный HKLM, а не в Wow6432Node
+                using var localMachine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+
+                // 1. Управление ключом RUN
+                using (var key = localMachine.OpenSubKey(runKeyPath, true))
+                {
+                    if (key != null)
+                    {
+                        if (enable)
+                        {
+                            string exePath = Environment.ProcessPath ?? "";
+                            if (!string.IsNullOrEmpty(exePath))
+                            {
+                                key.SetValue(RegistryName, exePath);
+                                LogToFile($"Registry (64-bit) SET {RegistryName} -> {exePath}");
+                            }
+                        }
+                        else
+                        {
+                            if (key.GetValue(RegistryName) != null)
+                            {
+                                key.DeleteValue(RegistryName, false);
+                                LogToFile($"Registry (64-bit) DELETED {RegistryName}");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        LogToFile("Error: Could not open HKLM Run key (64-bit view).");
+                    }
+                }
+
+                // 2. СБРОС StartupApproved (Тоже в 64-bit)
+                if (enable)
+                {
+                    try
+                    {
+                        using (var approvedKey = localMachine.OpenSubKey(approvedKeyPath, true))
+                        {
+                            if (approvedKey != null && approvedKey.GetValue(RegistryName) != null)
+                            {
+                                approvedKey.DeleteValue(RegistryName, false);
+                                LogToFile("Cleared 'StartupApproved' status in 64-bit registry.");
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"CRITICAL REGISTRY ERROR: {ex}");
             }
         }
 
@@ -117,49 +159,33 @@ namespace WorkerService
         {
             try
             {
-                // 1. Берем путь из конфига или ищем рядом с exe
                 string? configPath = _configuration.GetValue<string>("UserListPath");
-
                 string exeFolder = AppDomain.CurrentDomain.BaseDirectory;
                 string defaultPath = Path.Combine(exeFolder, "users.txt");
-
-                // Если в конфиге пусто, берем дефолтный
                 string finalPath = !string.IsNullOrWhiteSpace(configPath) ? configPath : defaultPath;
 
-                if (!File.Exists(finalPath))
-                {
-                    LogToFile($"Файл не найден: {finalPath}");
-                    return false;
-                }
+                if (!File.Exists(finalPath)) return false;
 
                 var allowedUsers = File.ReadAllLines(finalPath)
                                        .Select(line => line.Trim())
                                        .Where(line => !string.IsNullOrEmpty(line));
 
-                string currentUser = Environment.UserName;
-
-                // Для теста, если служба работает под SYSTEM, можно вернуть true
-                // return true; 
-
-                return allowedUsers.Contains(currentUser, StringComparer.OrdinalIgnoreCase);
+                return allowedUsers.Contains(Environment.UserName, StringComparer.OrdinalIgnoreCase);
             }
-            catch (Exception ex)
+            catch
             {
-                LogToFile($"Ошибка проверки пользователя: {ex.Message}");
                 return false;
             }
         }
+
         private void LogToFile(string message)
         {
             try
             {
-                // Пишем лог на диск C, чтобы вы видели, что программа жива
-                File.AppendAllText(@"C:\TaskLocker_Log.txt", $"{DateTime.Now}: {message}{Environment.NewLine}");
+                string logFile = @"C:\Users\Public\TaskLocker_Worker_Log.txt";
+                File.AppendAllText(logFile, $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
             }
-            catch
-            {
-                // Игнорируем ошибки записи лога
-            }
+            catch { }
         }
     }
 }
